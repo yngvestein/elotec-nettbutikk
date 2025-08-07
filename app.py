@@ -338,11 +338,19 @@ def main():
 
     top_cols = st.columns(2)
     with top_cols[0]:
-        if st.button("Velg alle", key="select_all_top"):
-            set_all(True)
+        st.button(
+            "Velg alle",
+            key="select_all_top",
+            on_click=set_all,
+            args=(True,),
+        )
     with top_cols[1]:
-        if st.button("Velg ingen", key="select_none_top"):
-            set_all(False)
+        st.button(
+            "Velg ingen",
+            key="select_none_top",
+            on_click=set_all,
+            args=(False,),
+        )
 
     selected = []
     for m in masters:
@@ -362,11 +370,19 @@ def main():
 
     bottom_cols = st.columns(2)
     with bottom_cols[0]:
-        if st.button("Velg alle", key="select_all_bottom"):
-            set_all(True)
+        st.button(
+            "Velg alle",
+            key="select_all_bottom",
+            on_click=set_all,
+            args=(True,),
+        )
     with bottom_cols[1]:
-        if st.button("Velg ingen", key="select_none_bottom"):
-            set_all(False)
+        st.button(
+            "Velg ingen",
+            key="select_none_bottom",
+            on_click=set_all,
+            args=(False,),
+        )
 
     main_tsv, desc_tsv, combined = generate_tsv(selected, selected_fields, desc_fieldnames)
 
