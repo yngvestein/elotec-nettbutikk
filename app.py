@@ -6,6 +6,18 @@ import streamlit as st
 
 st.set_page_config(page_title="Elotec Nettbutikk", layout="wide")
 
+# Hindre linjeskift i checkbox-etiketter
+st.markdown(
+    """
+    <style>
+    div[data-testid="stCheckbox"] label div[data-testid="stMarkdownContainer"] {
+        white-space: nowrap;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 csv.field_size_limit(10**7)
 
 # Kart for fargekoder (nummer og bokstaver)
@@ -235,6 +247,9 @@ def process_csv(uploaded_file):
             vr['Ikke synlig i lister'] = 'true'
             vr['Attributtsett'] = 'Farge'
             vr['Farge'] = color  # Legg til norsk fargeverdi
+            vr['elo.group.intermediate'] = v.get('elo.group.intermediate', '')
+            vr['elo.group.main'] = v.get('elo.group.main', '')
+            vr['elo.group.sub'] = v.get('elo.group.sub', '')
             for f in extra_fields:
                 vr[f] = v.get(f, '')
             variant_rows.append(vr)
@@ -286,7 +301,7 @@ def generate_tsv(masters, selected_fields, desc_fieldnames):
 
 def main():
     st.title("Elotec Nettbutikk")
-    choice = st.sidebar.selectbox("Velg funksjon", ["Opprett masterprodukt"])
+    choice = st.sidebar.radio("Velg funksjon", ["Opprett masterprodukt"])
     uploaded_file = st.file_uploader("Last opp eksportfil", type=["csv"])
 
     if uploaded_file is None:
@@ -295,13 +310,15 @@ def main():
     masters, fieldnames, desc_fieldnames, base_fieldnames = process_csv(uploaded_file)
 
     st.markdown("### Kolonner for eksport")
-    cols = st.columns(len(fieldnames))
+    num_cols = 3
+    cols = st.columns(num_cols)
     selected_fields = []
     for i, f in enumerate(fieldnames):
         default = f in base_fieldnames
         disabled = f in base_fieldnames and choice == "Opprett masterprodukt"
-        with cols[i]:
-            if st.checkbox(f, value=default, disabled=disabled):
+        col = cols[i % num_cols]
+        with col:
+            if st.checkbox(f, value=default, disabled=disabled, key=f"field_{f}"):
                 selected_fields.append(f)
     for f in base_fieldnames:
         if f not in selected_fields:
@@ -312,10 +329,17 @@ def main():
     selected = []
     for m in masters:
         label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
-        if st.checkbox(label, value=True, key=f"master_{m['base']}"):
+        checked = st.checkbox(label, value=True, key=f"master_{m['base']}")
+        if checked:
             selected.append(m)
-        df = pd.DataFrame([m['master_row']] + m['variant_rows'])
-        st.table(df[selected_fields])
+            df = pd.DataFrame([m['master_row']] + m['variant_rows'])
+            edited_df = st.data_editor(
+                df[selected_fields], hide_index=True, key=f"editor_{m['base']}"
+            )
+            for col in selected_fields:
+                m['master_row'][col] = edited_df.iloc[0][col]
+                for idx, vr in enumerate(m['variant_rows']):
+                    vr[col] = edited_df.iloc[idx + 1][col]
 
     main_tsv, desc_tsv, combined = generate_tsv(selected, selected_fields, desc_fieldnames)
 
