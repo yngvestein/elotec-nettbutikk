@@ -1,6 +1,7 @@
 import csv
 import io
 import re
+import json
 import pandas as pd
 import streamlit as st
 
@@ -12,6 +13,13 @@ st.markdown(
     <style>
     div[data-testid="stCheckbox"] label div[data-testid="stMarkdownContainer"] {
         white-space: nowrap;
+    }
+    /* Boolean cell styling */
+    div[data-testid="stDataEditor"] div[role="cell"][aria-valuetext="True"] {
+        background-color: #d1e7dd;
+    }
+    div[data-testid="stDataEditor"] div[role="cell"][aria-valuetext="False"] {
+        background-color: #f8d7da;
     }
     </style>
     """,
@@ -272,6 +280,16 @@ def generate_tsv(masters, selected_fields, desc_fieldnames):
         output_rows.extend(m['variant_rows'])
         desc_output_rows.extend(m['desc_rows'])
 
+    def normalize_bool(row):
+        for k, v in row.items():
+            if isinstance(v, bool):
+                row[k] = str(v).lower()
+
+    for r in output_rows:
+        normalize_bool(r)
+    for r in desc_output_rows:
+        normalize_bool(r)
+
     buffer_main = io.StringIO()
     # ``output_rows`` kan inneholde flere nøkler enn det brukeren har valgt å
     # inkludere i eksporten. ``csv.DictWriter`` kaster da en ``ValueError`` hvis
@@ -313,7 +331,7 @@ def main():
     masters, fieldnames, desc_fieldnames, base_fieldnames = process_csv(uploaded_file)
 
     st.markdown("### Kolonner for eksport")
-    num_cols = 3
+    num_cols = 4
     selected_fields = []
     for row_start in range(0, len(fieldnames), num_cols):
         row_fields = fieldnames[row_start : row_start + num_cols]
@@ -336,59 +354,65 @@ def main():
         for k in master_keys:
             st.session_state[k] = value
 
-    top_cols = st.columns(2)
-    with top_cols[0]:
-        st.button(
-            "Velg alle",
-            key="select_all_top",
-            on_click=set_all,
-            args=(True,),
-        )
-    with top_cols[1]:
-        st.button(
-            "Velg ingen",
-            key="select_none_top",
-            on_click=set_all,
-            args=(False,),
-        )
+    def on_select_change():
+        action = st.session_state.select_action
+        set_all(action == "Velg alle")
+
+    st.radio(
+        "Markeringsvalg",
+        ["Velg alle", "Velg ingen"],
+        horizontal=True,
+        key="select_action",
+        index=1,
+        on_change=on_select_change,
+    )
 
     selected = []
     for m in masters:
         label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
         key = f"master_{m['base']}"
-        checked = st.checkbox(label, value=st.session_state.get(key, True), key=key)
+        checked = st.checkbox(label, value=st.session_state.get(key, False), key=key)
         if checked:
             selected.append(m)
             df = pd.DataFrame([m['master_row']] + m['variant_rows']).reset_index(drop=True)
+            bool_cols = [
+                col
+                for col in selected_fields
+                if set(str(v).lower() for v in df[col].unique()) <= {"true", "false"}
+            ]
+            for col in bool_cols:
+                df[col] = df[col].astype(str).str.lower().map({"true": True, "false": False})
+            column_config = {
+                col: st.column_config.SelectboxColumn(col, options=[True, False], default=False)
+                for col in bool_cols
+            }
             edited_df = st.data_editor(
-                df[selected_fields], hide_index=True, key=f"editor_{m['base']}"
+                df[selected_fields],
+                hide_index=True,
+                key=f"editor_{m['base']}",
+                column_config=column_config,
             )
             for col in selected_fields:
-                m['master_row'][col] = edited_df.iloc[0][col]
+                val = edited_df.iloc[0][col]
+                m['master_row'][col] = val if col not in bool_cols else str(val).lower()
                 for idx, vr in enumerate(m['variant_rows']):
-                    vr[col] = edited_df.iloc[idx + 1][col]
-
-    bottom_cols = st.columns(2)
-    with bottom_cols[0]:
-        st.button(
-            "Velg alle",
-            key="select_all_bottom",
-            on_click=set_all,
-            args=(True,),
-        )
-    with bottom_cols[1]:
-        st.button(
-            "Velg ingen",
-            key="select_none_bottom",
-            on_click=set_all,
-            args=(False,),
-        )
+                    val_v = edited_df.iloc[idx + 1][col]
+                    vr[col] = val_v if col not in bool_cols else str(val_v).lower()
 
     main_tsv, desc_tsv, combined = generate_tsv(selected, selected_fields, desc_fieldnames)
 
     st.subheader("Generert TSV")
-    st.text_area("Produktdata", main_tsv, height=200)
-    st.text_area("Beskrivelse", desc_tsv, height=200)
+
+    def copy_to_clipboard(text):
+        st.markdown(
+            f"<script>navigator.clipboard.writeText({json.dumps(text)});</script>",
+            unsafe_allow_html=True,
+        )
+
+    st.text_area("Produktdata", main_tsv, height=300, key="main_tsv")
+    st.button("Kopier produktdata", on_click=copy_to_clipboard, args=(main_tsv,))
+    st.text_area("Beskrivelse", desc_tsv, height=300, key="desc_tsv")
+    st.button("Kopier beskrivelse", on_click=copy_to_clipboard, args=(desc_tsv,))
 
     st.download_button(
         label="Last ned master/variant fil",
