@@ -238,6 +238,9 @@ def process_csv(uploaded_file):
         desc_rows = [{'Nummer': master_row['Nummer'], 'Salgstekst (Norsk)': sales, 'Beskrivelse (Norsk)': desc}]
 
         variant_rows = []
+        group_int = master_row.get('elo.group.intermediate', '')
+        group_main = master_row.get('elo.group.main', '')
+        group_sub = master_row.get('elo.group.sub', '')
         for v, color in variants:
             vr = {key: '' for key in fieldnames}
             vr['Nummer'] = v['Nummer']
@@ -247,9 +250,9 @@ def process_csv(uploaded_file):
             vr['Ikke synlig i lister'] = 'true'
             vr['Attributtsett'] = 'Farge'
             vr['Farge'] = color  # Legg til norsk fargeverdi
-            vr['elo.group.intermediate'] = v.get('elo.group.intermediate', '')
-            vr['elo.group.main'] = v.get('elo.group.main', '')
-            vr['elo.group.sub'] = v.get('elo.group.sub', '')
+            vr['elo.group.intermediate'] = v.get('elo.group.intermediate', group_int)
+            vr['elo.group.main'] = v.get('elo.group.main', group_main)
+            vr['elo.group.sub'] = v.get('elo.group.sub', group_sub)
             for f in extra_fields:
                 vr[f] = v.get(f, '')
             variant_rows.append(vr)
@@ -311,28 +314,44 @@ def main():
 
     st.markdown("### Kolonner for eksport")
     num_cols = 3
-    cols = st.columns(num_cols)
     selected_fields = []
-    for i, f in enumerate(fieldnames):
-        default = f in base_fieldnames
-        disabled = f in base_fieldnames and choice == "Opprett masterprodukt"
-        col = cols[i % num_cols]
-        with col:
-            if st.checkbox(f, value=default, disabled=disabled, key=f"field_{f}"):
-                selected_fields.append(f)
+    for row_start in range(0, len(fieldnames), num_cols):
+        row_fields = fieldnames[row_start : row_start + num_cols]
+        cols = st.columns(num_cols)
+        for col, f in zip(cols, row_fields):
+            default = f in base_fieldnames
+            disabled = f in base_fieldnames and choice == "Opprett masterprodukt"
+            with col:
+                if st.checkbox(f, value=default, disabled=disabled, key=f"field_{f}"):
+                    selected_fields.append(f)
     for f in base_fieldnames:
         if f not in selected_fields:
             selected_fields.append(f)
 
     st.success("Fil behandlet. Velg masterprodukter som skal inkluderes.")
 
+    master_keys = [f"master_{m['base']}" for m in masters]
+
+    def set_all(value: bool):
+        for k in master_keys:
+            st.session_state[k] = value
+
+    top_cols = st.columns(2)
+    with top_cols[0]:
+        if st.button("Velg alle", key="select_all_top"):
+            set_all(True)
+    with top_cols[1]:
+        if st.button("Velg ingen", key="select_none_top"):
+            set_all(False)
+
     selected = []
     for m in masters:
         label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
-        checked = st.checkbox(label, value=True, key=f"master_{m['base']}")
+        key = f"master_{m['base']}"
+        checked = st.checkbox(label, value=st.session_state.get(key, True), key=key)
         if checked:
             selected.append(m)
-            df = pd.DataFrame([m['master_row']] + m['variant_rows'])
+            df = pd.DataFrame([m['master_row']] + m['variant_rows']).reset_index(drop=True)
             edited_df = st.data_editor(
                 df[selected_fields], hide_index=True, key=f"editor_{m['base']}"
             )
@@ -340,6 +359,14 @@ def main():
                 m['master_row'][col] = edited_df.iloc[0][col]
                 for idx, vr in enumerate(m['variant_rows']):
                     vr[col] = edited_df.iloc[idx + 1][col]
+
+    bottom_cols = st.columns(2)
+    with bottom_cols[0]:
+        if st.button("Velg alle", key="select_all_bottom"):
+            set_all(True)
+    with bottom_cols[1]:
+        if st.button("Velg ingen", key="select_none_bottom"):
+            set_all(False)
 
     main_tsv, desc_tsv, combined = generate_tsv(selected, selected_fields, desc_fieldnames)
 
