@@ -4,6 +4,8 @@ import re
 import pandas as pd
 import streamlit as st
 
+st.set_page_config(page_title="Elotec Nettbutikk", layout="wide")
+
 csv.field_size_limit(10**7)
 
 # Kart for fargekoder (nummer og bokstaver)
@@ -163,12 +165,15 @@ def process_csv(uploaded_file):
     reader = csv.DictReader(text, delimiter=',')
     rows = list(reader)
 
-    fieldnames = [
+    base_fieldnames = [
         'Nummer', 'Navn', 'Forvalgt variant', 'Varianter', 'Tilbehør',
         'Sider', 'Nyhet', 'Variantmaster', 'Variantprodukt', 'Ikke synlig i lister',
         'Attributtsett', 'elo.group.intermediate', 'elo.group.main', 'elo.group.sub',
         'elo.product.number', 'Tittel', 'Tittel (Norsk)', 'Farge'
     ]
+    csv_fields = reader.fieldnames or []
+    extra_fields = [f for f in csv_fields if f not in base_fieldnames]
+    fieldnames = base_fieldnames + extra_fields
     desc_fieldnames = ['Nummer', 'Salgstekst (Norsk)', 'Beskrivelse (Norsk)']
 
     valid_rows = [r for r in rows if is_valid_variant(r)]
@@ -207,6 +212,8 @@ def process_csv(uploaded_file):
         master_row['Tittel'] = variants[0][0].get('Tittel', '')
         master_row['Tittel (Norsk)'] = variants[0][0].get('Tittel (Norsk)', '')
         master_row['Tilbehør'] = variants[0][0].get('Tilbehør', '')
+        for f in extra_fields:
+            master_row[f] = variants[0][0].get(f, '')
 
         all_pages = set()
         for v, _ in variants:
@@ -228,15 +235,17 @@ def process_csv(uploaded_file):
             vr['Ikke synlig i lister'] = 'true'
             vr['Attributtsett'] = 'Farge'
             vr['Farge'] = color  # Legg til norsk fargeverdi
+            for f in extra_fields:
+                vr[f] = v.get(f, '')
             variant_rows.append(vr)
             desc_rows.append({'Nummer': v['Nummer'], 'Salgstekst (Norsk)': '', 'Beskrivelse (Norsk)': ''})
 
         masters.append({'base': base, 'master_row': master_row, 'variant_rows': variant_rows, 'desc_rows': desc_rows})
 
-    return masters, fieldnames, desc_fieldnames
+    return masters, fieldnames, desc_fieldnames, base_fieldnames
 
 
-def generate_tsv(masters, fieldnames, desc_fieldnames):
+def generate_tsv(masters, selected_fields, desc_fieldnames):
     """Generer TSV-strenger fra valgte masterprodukter"""
     output_rows = []
     desc_output_rows = []
@@ -246,7 +255,7 @@ def generate_tsv(masters, fieldnames, desc_fieldnames):
         desc_output_rows.extend(m['desc_rows'])
 
     buffer_main = io.StringIO()
-    writer = csv.DictWriter(buffer_main, fieldnames=fieldnames, delimiter='\t')
+    writer = csv.DictWriter(buffer_main, fieldnames=selected_fields, delimiter='\t')
     writer.writeheader()
     writer.writerows(output_rows)
     main_tsv = buffer_main.getvalue()
@@ -262,35 +271,49 @@ def generate_tsv(masters, fieldnames, desc_fieldnames):
 
 def main():
     st.title("Elotec Nettbutikk")
-    choice = st.selectbox("Velg funksjon", ["Opprett masterprodukt"])
+    choice = st.sidebar.selectbox("Velg funksjon", ["Opprett masterprodukt"])
+    uploaded_file = st.file_uploader("Last opp eksportfil", type=["csv"])
 
-    if choice == "Opprett masterprodukt":
-        st.header("Opprett masterprodukt")
-        uploaded_file = st.file_uploader("Last opp eksportfil", type=["csv"])
-        if uploaded_file is not None:
-            masters, fieldnames, desc_fieldnames = process_csv(uploaded_file)
+    if uploaded_file is None:
+        return
 
-            st.success("Fil behandlet. Velg masterprodukter som skal inkluderes.")
+    masters, fieldnames, desc_fieldnames, base_fieldnames = process_csv(uploaded_file)
 
-            selected = []
-            for m in masters:
-                label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
-                if st.checkbox(label, value=True):
-                    selected.append(m)
-                st.table(pd.DataFrame([m['master_row']] + m['variant_rows']))
+    st.markdown("### Kolonner for eksport")
+    cols = st.columns(len(fieldnames))
+    selected_fields = []
+    for i, f in enumerate(fieldnames):
+        default = f in base_fieldnames
+        disabled = f in base_fieldnames and choice == "Opprett masterprodukt"
+        with cols[i]:
+            if st.checkbox(f, value=default, disabled=disabled):
+                selected_fields.append(f)
+    for f in base_fieldnames:
+        if f not in selected_fields:
+            selected_fields.append(f)
 
-            main_tsv, desc_tsv, combined = generate_tsv(selected, fieldnames, desc_fieldnames)
+    st.success("Fil behandlet. Velg masterprodukter som skal inkluderes.")
 
-            st.subheader("Generert TSV")
-            st.text_area("Produktdata", main_tsv, height=200)
-            st.text_area("Beskrivelse", desc_tsv, height=200)
+    selected = []
+    for m in masters:
+        label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
+        if st.checkbox(label, value=True, key=f"master_{m['base']}"):
+            selected.append(m)
+        df = pd.DataFrame([m['master_row']] + m['variant_rows'])
+        st.table(df[selected_fields])
 
-            st.download_button(
-                label="Last ned master/variant fil",
-                data=combined,
-                file_name="new_master_variant_products.tsv",
-                mime="text/tab-separated-values",
-            )
+    main_tsv, desc_tsv, combined = generate_tsv(selected, selected_fields, desc_fieldnames)
+
+    st.subheader("Generert TSV")
+    st.text_area("Produktdata", main_tsv, height=200)
+    st.text_area("Beskrivelse", desc_tsv, height=200)
+
+    st.download_button(
+        label="Last ned master/variant fil",
+        data=combined,
+        file_name="new_master_variant_products.tsv",
+        mime="text/tab-separated-values",
+    )
 
 if __name__ == "__main__":
     main()
