@@ -1,6 +1,7 @@
 import csv
 import io
 import re
+import pandas as pd
 import streamlit as st
 
 csv.field_size_limit(10**7)
@@ -156,7 +157,7 @@ def clean_name(name):
     return cleaned
 
 def process_csv(uploaded_file):
-    """Prosesser CSV fra opplastet fil og returner TSV-innhold"""
+    """Prosesser CSV og returner strukturert data"""
     uploaded_file.seek(0)
     text = io.StringIO(uploaded_file.getvalue().decode('utf-8'))
     reader = csv.DictReader(text, delimiter=',')
@@ -184,9 +185,7 @@ def process_csv(uploaded_file):
             product_groups[base] = []
         product_groups[base].append((row, color))
 
-    output_rows = []
-    desc_output_rows = []
-
+    masters = []
     for base, variants in product_groups.items():
         if len(variants) < 2:
             continue  # Ikke lag master for enkeltstående
@@ -215,12 +214,11 @@ def process_csv(uploaded_file):
                 all_pages.update([p.strip() for p in v['Sider'].split(',')])
         master_row['Sider'] = ','.join(sorted(all_pages))
 
-        output_rows.append(master_row)
-
         sales = variants[0][0].get('Salgstekst (Norsk)', '')
         desc = variants[0][0].get('Beskrivelse (Norsk)', '')
-        desc_output_rows.append({'Nummer': master_row['Nummer'], 'Salgstekst (Norsk)': sales, 'Beskrivelse (Norsk)': desc})
+        desc_rows = [{'Nummer': master_row['Nummer'], 'Salgstekst (Norsk)': sales, 'Beskrivelse (Norsk)': desc}]
 
+        variant_rows = []
         for v, color in variants:
             vr = {key: '' for key in fieldnames}
             vr['Nummer'] = v['Nummer']
@@ -230,19 +228,37 @@ def process_csv(uploaded_file):
             vr['Ikke synlig i lister'] = 'true'
             vr['Attributtsett'] = 'Farge'
             vr['Farge'] = color  # Legg til norsk fargeverdi
-            output_rows.append(vr)
-            desc_output_rows.append({'Nummer': v['Nummer'], 'Salgstekst (Norsk)': '', 'Beskrivelse (Norsk)': ''})
+            variant_rows.append(vr)
+            desc_rows.append({'Nummer': v['Nummer'], 'Salgstekst (Norsk)': '', 'Beskrivelse (Norsk)': ''})
 
-    buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=fieldnames, delimiter='\t')
+        masters.append({'base': base, 'master_row': master_row, 'variant_rows': variant_rows, 'desc_rows': desc_rows})
+
+    return masters, fieldnames, desc_fieldnames
+
+
+def generate_tsv(masters, fieldnames, desc_fieldnames):
+    """Generer TSV-strenger fra valgte masterprodukter"""
+    output_rows = []
+    desc_output_rows = []
+    for m in masters:
+        output_rows.append(m['master_row'])
+        output_rows.extend(m['variant_rows'])
+        desc_output_rows.extend(m['desc_rows'])
+
+    buffer_main = io.StringIO()
+    writer = csv.DictWriter(buffer_main, fieldnames=fieldnames, delimiter='\t')
     writer.writeheader()
     writer.writerows(output_rows)
-    writer.writerow({field: '' for field in fieldnames})
-    desc_writer = csv.DictWriter(buffer, fieldnames=desc_fieldnames, delimiter='\t')
+    main_tsv = buffer_main.getvalue()
+
+    buffer_desc = io.StringIO()
+    desc_writer = csv.DictWriter(buffer_desc, fieldnames=desc_fieldnames, delimiter='\t')
     desc_writer.writeheader()
     desc_writer.writerows(desc_output_rows)
+    desc_tsv = buffer_desc.getvalue()
 
-    return buffer.getvalue()
+    combined = main_tsv + "\n" + desc_tsv
+    return main_tsv, desc_tsv, combined
 
 def main():
     st.title("Elotec Nettbutikk")
@@ -252,13 +268,28 @@ def main():
         st.header("Opprett masterprodukt")
         uploaded_file = st.file_uploader("Last opp eksportfil", type=["csv"])
         if uploaded_file is not None:
-            tsv_data = process_csv(uploaded_file)
-            st.success("Ferdig. Last ned filen under.")
+            masters, fieldnames, desc_fieldnames = process_csv(uploaded_file)
+
+            st.success("Fil behandlet. Velg masterprodukter som skal inkluderes.")
+
+            selected = []
+            for m in masters:
+                label = f"{m['master_row']['Nummer']} - {m['master_row']['Navn']}"
+                if st.checkbox(label, value=True):
+                    selected.append(m)
+                st.table(pd.DataFrame([m['master_row']] + m['variant_rows']))
+
+            main_tsv, desc_tsv, combined = generate_tsv(selected, fieldnames, desc_fieldnames)
+
+            st.subheader("Generert TSV")
+            st.text_area("Produktdata", main_tsv, height=200)
+            st.text_area("Beskrivelse", desc_tsv, height=200)
+
             st.download_button(
                 label="Last ned master/variant fil",
-                data=tsv_data,
+                data=combined,
                 file_name="new_master_variant_products.tsv",
-                mime="text/tab-separated-values"
+                mime="text/tab-separated-values",
             )
 
 if __name__ == "__main__":
