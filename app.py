@@ -255,13 +255,28 @@ def generate_tsv(masters, selected_fields, desc_fieldnames):
         desc_output_rows.extend(m['desc_rows'])
 
     buffer_main = io.StringIO()
-    writer = csv.DictWriter(buffer_main, fieldnames=selected_fields, delimiter='\t')
+    # ``output_rows`` kan inneholde flere nøkler enn det brukeren har valgt å
+    # inkludere i eksporten. ``csv.DictWriter`` kaster da en ``ValueError`` hvis
+    # den møter ukjente felter. Ved å sette ``extrasaction='ignore'`` sørger vi
+    # for at eventuelle ekstra felter blir ignorert i stedet for å forårsake feil
+    # ved generering av TSV-filen.
+    writer = csv.DictWriter(
+        buffer_main,
+        fieldnames=selected_fields,
+        delimiter='\t',
+        extrasaction='ignore',
+    )
     writer.writeheader()
     writer.writerows(output_rows)
     main_tsv = buffer_main.getvalue()
 
     buffer_desc = io.StringIO()
-    desc_writer = csv.DictWriter(buffer_desc, fieldnames=desc_fieldnames, delimiter='\t')
+    desc_writer = csv.DictWriter(
+        buffer_desc,
+        fieldnames=desc_fieldnames,
+        delimiter='\t',
+        extrasaction='ignore',
+    )
     desc_writer.writeheader()
     desc_writer.writerows(desc_output_rows)
     desc_tsv = buffer_desc.getvalue()
